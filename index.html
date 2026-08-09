@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NextGen Draft Beer SCADA Historian</title>
+    
+    <!-- MQTT.js Client -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    
+    <!-- ApexCharts for Time-Series Historian -->
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+
+    <!-- Modern Typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            /* Sleek Dark Theme Palette */
+            --bg-base: #09090b;       
+            --panel-bg: rgba(24, 24, 27, 0.7); 
+            --panel-border: rgba(63, 63, 70, 0.5); 
+            --text-muted: #a1a1aa;    
+            --text-bright: #f4f4f5;   
+            
+            /* Neon Accents */
+            --neon-blue: #38bdf8;
+            --neon-green: #34d399;
+            --neon-amber: #fbbf24;
+            --neon-red: #f87171;
+            
+            --font-ui: 'Inter', sans-serif;
+            --font-mono: 'JetBrains Mono', monospace;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            background-image: 
+                linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+            background-size: 30px 30px;
+            color: var(--text-bright);
+            font-family: var(--font-ui);
+            margin: 0;
+            padding: 30px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        /* Header & Tabs */
+        .header {
+            width: 100%; max-width: 1400px; display: flex; justify-content: space-between;
+            align-items: center; background: var(--panel-bg); backdrop-filter: blur(12px);
+            border: 1px solid var(--panel-border); border-radius: 12px 12px 0 0;
+            padding: 15px 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); box-sizing: border-box;
+        }
+
+        .header-title-group { display: flex; align-items: center; gap: 30px; }
+        .header h1 {
+            margin: 0; font-size: 22px; font-weight: 800; letter-spacing: 1px;
+            background: linear-gradient(90deg, var(--neon-blue), var(--neon-green));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; text-transform: uppercase;
+        }
+
+        .tabs { display: flex; gap: 15px; }
+        .tab-btn {
+            background: none; border: none; color: var(--text-muted); font-family: var(--font-ui);
+            font-size: 14px; font-weight: 600; padding: 10px 15px; cursor: pointer;
+            border-bottom: 2px solid transparent; transition: all 0.3s ease; text-transform: uppercase; letter-spacing: 1px;
+        }
+        .tab-btn:hover { color: var(--text-bright); }
+        .tab-btn.active { color: var(--neon-blue); border-bottom: 2px solid var(--neon-blue); text-shadow: 0 0 10px rgba(56, 189, 248, 0.4); }
+
+        .header-status-group { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+        .status-badges { display: flex; gap: 10px; }
+        .status {
+            padding: 4px 12px; border-radius: 30px; font-weight: 600; font-size: 11px;
+            letter-spacing: 0.5px; display: flex; align-items: center; gap: 6px;
+            background: rgba(0,0,0,0.3); border: 1px solid var(--panel-border); text-transform: uppercase;
+        }
+        .status::before { content: ''; display: block; width: 6px; height: 6px; border-radius: 50%; }
+        .status-good { color: var(--neon-green); border-color: rgba(52, 211, 153, 0.3); }
+        .status-good::before { background-color: var(--neon-green); box-shadow: 0 0 8px var(--neon-green); }
+        .status-warn { color: var(--neon-amber); border-color: rgba(251, 191, 36, 0.3); }
+        .status-warn::before { background-color: var(--neon-amber); box-shadow: 0 0 8px var(--neon-amber); }
+        .status-bad { color: var(--neon-red); border-color: rgba(248, 113, 113, 0.3); }
+        .status-bad::before { background-color: var(--neon-red); box-shadow: 0 0 8px var(--neon-red); }
+        .status-unknown { color: var(--text-muted); border-color: var(--panel-border); }
+        .status-unknown::before { background-color: var(--text-muted); }
+
+        .global-time { font-family: var(--font-mono); font-size: 12px; color: var(--neon-blue); letter-spacing: 0.5px; }
+
+        /* Main Content Area */
+        .content-area {
+            width: 100%; max-width: 1400px; background: rgba(24, 24, 27, 0.3);
+            border: 1px solid var(--panel-border); border-top: none; border-radius: 0 0 12px 12px;
+            padding: 24px; box-sizing: border-box; backdrop-filter: blur(12px);
+        }
+
+        .view { display: none; }
+        .view.active { display: grid; }
+        .view-flex.active { display: flex; flex-direction: column; gap: 20px; }
+
+        /* DASHBOARD VIEW */
+        #view-dashboard { grid-template-columns: 300px 1fr 300px; gap: 24px; }
+        .panel {
+            background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;
+            padding: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); display: flex; flex-direction: column; gap: 16px;
+        }
+        .panel h2 {
+            margin: 0 0 5px 0; font-size: 13px; font-weight: 600; color: var(--text-muted);
+            text-transform: uppercase; letter-spacing: 1.5px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 12px;
+        }
+        
+        .data-row { display: flex; justify-content: space-between; align-items: center; }
+        .data-label { font-size: 14px; color: var(--text-muted); }
+        .data-value { font-family: var(--font-mono); font-size: 16px; font-weight: 700; color: var(--text-bright); text-shadow: 0 0 10px rgba(255,255,255,0.2); }
+        
+        /* Interactive Data Rows for Historian */
+        .clickable-row {
+            cursor: pointer; transition: background 0.2s, transform 0.1s;
+            padding: 6px 10px; margin: -6px -10px; border-radius: 8px;
+        }
+        .clickable-row:hover { background: rgba(255, 255, 255, 0.05); transform: translateX(2px); }
+        
+        .val-highlight-blue { color: var(--neon-blue); text-shadow: 0 0 10px rgba(56, 189, 248, 0.4); }
+        .val-highlight-green { color: var(--neon-green); text-shadow: 0 0 10px rgba(52, 211, 153, 0.4); }
+        .val-highlight-amber { color: var(--neon-amber); text-shadow: 0 0 10px rgba(251, 191, 36, 0.4); }
+
+        .maps-link {
+            display: block; text-align: center; background: rgba(56, 189, 248, 0.1); color: var(--neon-blue);
+            text-decoration: none; padding: 10px; border-radius: 8px; border: 1px solid rgba(56, 189, 248, 0.3);
+            font-size: 13px; font-weight: 600; transition: all 0.2s ease; margin-top: 5px;
+        }
+        .maps-link:hover { background: rgba(56, 189, 248, 0.2); box-shadow: 0 0 15px rgba(56, 189, 248, 0.2); }
+
+        /* SCADA Diagram Layout */
+        .scada-container {
+            position: relative; background: radial-gradient(circle at center, #1e293b 0%, #020617 100%);
+            border: 1px solid var(--panel-border); border-radius: 12px; overflow: hidden;
+            box-shadow: inset 0 0 50px rgba(0,0,0,0.8), 0 10px 30px rgba(0,0,0,0.5);
+            display: flex; justify-content: center; align-items: center; min-height: 550px;
+        }
+
+        .scada-svg { width: 100%; height: 100%; max-width: 1000px; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        .spin-fan { transform-origin: 500px 170px; animation: spin 0.8s linear infinite; }
+        @keyframes flowAnim { to { stroke-dashoffset: -20; } }
+        .flowing-liquid { stroke-dasharray: 10, 10; animation: flowAnim 0.8s linear infinite; }
+
+        /* SCADA Interactive Boxes */
+        .scada-box {
+            position: absolute; background: rgba(9, 9, 11, 0.85); backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.1); padding: 8px 12px; border-radius: 8px;
+            display: flex; flex-direction: column; align-items: center;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.5); transform: translate(-50%, -50%);
+            cursor: pointer; transition: all 0.2s ease;
+        }
+        
+        .scada-box:hover {
+            transform: translate(-50%, -55%) scale(1.05);
+            background: rgba(24, 24, 27, 0.95);
+            box-shadow: 0 15px 25px rgba(0,0,0,0.8);
+            border-color: rgba(255,255,255,0.3);
+        }
+
+        .scada-box .title { font-size: 10px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; pointer-events: none; }
+        .scada-box .val { font-family: var(--font-mono); font-weight: 700; font-size: 18px; pointer-events: none; }
+
+        .box-blue { border-bottom: 2px solid var(--neon-blue); }
+        .box-blue .val { color: var(--neon-blue); text-shadow: 0 0 10px rgba(56, 189, 248, 0.4); }
+        .box-amber { border-bottom: 2px solid var(--neon-amber); }
+        .box-amber .val { color: var(--neon-amber); text-shadow: 0 0 10px rgba(251, 191, 36, 0.4); }
+        .box-green { border-bottom: 2px solid var(--neon-green); }
+        .box-green .val { color: var(--neon-green); text-shadow: 0 0 10px rgba(52, 211, 153, 0.4); }
+
+        /* SMART ALARM ANIMATION */
+        @keyframes alarmPulse {
+            0% { box-shadow: 0 0 10px var(--neon-red), inset 0 0 10px rgba(248, 113, 113, 0.2); border-color: var(--neon-red); }
+            50% { box-shadow: 0 0 30px var(--neon-red), inset 0 0 20px rgba(248, 113, 113, 0.5); border-color: var(--neon-red); }
+            100% { box-shadow: 0 0 10px var(--neon-red), inset 0 0 10px rgba(248, 113, 113, 0.2); border-color: var(--neon-red); }
+        }
+        .alarm-active {
+            animation: alarmPulse 1s infinite;
+            border-bottom: 2px solid var(--neon-red) !important;
+        }
+        .alarm-active .val { color: var(--neon-red) !important; text-shadow: 0 0 15px var(--neon-red) !important; }
+
+        /* Specific Placements */
+        #box-co2 { top: 75%; left: 10%; }
+        #box-sump { top: 85%; left: 55%; }
+        #box-inlet { top: 34%; left: 38%; }
+        #box-outlet { top: 34%; left: 73%; }
+        #box-pour { top: 45%; left: 80%; }
+        #box-flow { top: 70%; left: 85%; }
+
+        .meta-footer {
+            grid-column: 1 / -1; display: flex; justify-content: center; gap: 30px;
+            font-family: var(--font-mono); font-size: 12px; color: rgba(161, 161, 170, 0.5);
+            padding: 10px 0; border-top: 1px solid rgba(255,255,255,0.05); margin-top: 10px;
+        }
+
+        /* ----------------------------------
+           COMMAND VIEW & TERMINAL
+           ---------------------------------- */
+        .cmd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+        .cmd-btn {
+            background: rgba(39, 39, 42, 0.5); border: 1px solid var(--panel-border); color: var(--text-bright);
+            padding: 15px; border-radius: 8px; font-family: var(--font-ui); font-weight: 600; font-size: 14px;
+            cursor: pointer; transition: all 0.2s ease; text-transform: uppercase; letter-spacing: 1px; display: flex; justify-content: center; align-items: center; gap: 10px;
+        }
+        .cmd-btn:hover { background: rgba(63, 63, 70, 0.8); transform: translateY(-2px); }
+        .cmd-btn:active { transform: translateY(0); }
+        .btn-green { border-bottom: 2px solid var(--neon-green); }
+        .btn-green:hover { box-shadow: 0 5px 15px rgba(52, 211, 153, 0.2); }
+        .btn-red { border-bottom: 2px solid var(--neon-red); }
+        .btn-red:hover { box-shadow: 0 5px 15px rgba(248, 113, 113, 0.2); }
+        .btn-amber { border-bottom: 2px solid var(--neon-amber); }
+        .btn-amber:hover { box-shadow: 0 5px 15px rgba(251, 191, 36, 0.2); }
+        .btn-blue { border-bottom: 2px solid var(--neon-blue); }
+        .btn-blue:hover { box-shadow: 0 5px 15px rgba(56, 189, 248, 0.2); }
+
+        .input-group { display: flex; gap: 10px; margin-top: 15px; }
+        input[type="number"], input[type="text"] {
+            flex: 1; background: rgba(0, 0, 0, 0.4); border: 1px solid var(--panel-border); color: var(--text-bright);
+            padding: 12px 15px; border-radius: 8px; font-family: var(--font-mono); font-size: 14px; outline: none;
+        }
+        input[type="number"]:focus, input[type="text"]:focus { border-color: var(--neon-blue); }
+
+        .terminal {
+            background: #000; border: 1px solid var(--panel-border); border-radius: 8px; padding: 15px;
+            height: 200px; overflow-y: auto; font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); display: flex; flex-direction: column; gap: 5px;
+        }
+        .term-entry { border-bottom: 1px dashed rgba(255,255,255,0.1); padding-bottom: 5px; }
+        .term-time { color: var(--neon-blue); margin-right: 10px; }
+        .term-msg { color: var(--neon-green); }
+        .term-err { color: var(--neon-red); }
+
+        /* ----------------------------------
+           HISTORIAN CHART MODAL OVERLAY
+           ---------------------------------- */
+        #chart-modal {
+            position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(8px);
+            z-index: 9999; display: none; justify-content: center; align-items: center;
+        }
+        #chart-modal.active { display: flex; }
+
+        .chart-panel {
+            background: var(--panel-bg); border: 1px solid var(--panel-border); border-radius: 12px;
+            width: 90%; max-width: 1000px; padding: 20px; box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+            display: flex; flex-direction: column;
+        }
+        
+        .chart-header {
+            display: flex; justify-content: space-between; align-items: center;
+            border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 15px; margin-bottom: 20px;
+        }
+        
+        .chart-header h2 { margin: 0; font-size: 18px; color: var(--neon-blue); text-transform: uppercase; letter-spacing: 1px;}
+        
+        .btn-close {
+            background: rgba(248, 113, 113, 0.1); border: 1px solid rgba(248, 113, 113, 0.4);
+            color: var(--neon-red); font-family: var(--font-ui); font-weight: 600;
+            padding: 8px 16px; border-radius: 6px; cursor: pointer; transition: all 0.2s; text-transform: uppercase;
+        }
+        .btn-close:hover { background: rgba(248, 113, 113, 0.3); }
+
+        #apex-chart-container { width: 100%; height: 400px; }
+        
+        /* ApexCharts Custom Dark Theme Overrides */
+        .apexcharts-tooltip { background: #18181b !important; border: 1px solid #3f3f46 !important; box-shadow: 0 5px 15px rgba(0,0,0,0.5) !important; color: #fff; font-family: var(--font-ui) !important;}
+        .apexcharts-tooltip-title { background: #09090b !important; border-bottom: 1px solid #3f3f46 !important; }
+        .apexcharts-menu { background: #18181b !important; border: 1px solid #3f3f46 !important; color: #fff;}
+        .apexcharts-theme-dark .apexcharts-menu-item:hover { background: #3f3f46 !important; }
+
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <div class="header-title-group">
+            <h1>Draft Beer SCADA</h1>
+            <div class="tabs">
+                <button class="tab-btn active" onclick="switchTab('dashboard')">Telemetry Dashboard</button>
+                <button class="tab-btn" onclick="switchTab('control')">Command & Control</button>
+            </div>
+        </div>
+        
+        <div class="header-status-group">
+            <div class="status-badges">
+                <div id="broker-status" class="status status-warn">BROKER: CONNECTING</div>
+                <div id="device-status" class="status status-unknown">DEVICE: UNKNOWN</div>
+            </div>
+            <div class="global-time" id="global-last-update">Last Update: Waiting for data...</div>
+        </div>
+    </div>
+
+    <div class="content-area">
+        
+        <!-- ==========================================
+             VIEW 1: DASHBOARD
+             ========================================== -->
+        <div id="view-dashboard" class="view active">
+            <!-- Left Panel (NOW CLICKABLE FOR HISTORIAN) -->
+            <div class="column" style="display:flex; flex-direction:column; gap:24px;">
+                <div class="panel">
+                    <h2>Power Analytics</h2>
+                    <div class="data-row clickable-row" onclick="openChart('voltage_v', 'Input Voltage (V)')">
+                        <span class="data-label">Voltage</span>
+                        <span class="data-value" id="val-volt">0.0 V</span>
+                    </div>
+                    <div class="data-row clickable-row" onclick="openChart('current_a', 'Current Draw (A)')">
+                        <span class="data-label">Current</span>
+                        <span class="data-value" id="val-curr">0.00 A</span>
+                    </div>
+                    <div class="data-row clickable-row" onclick="openChart('power_w', 'Active Power Consumption (W)')">
+                        <span class="data-label">Active Power</span>
+                        <span class="data-value val-highlight-blue" id="val-watt">0 W</span>
+                    </div>
+                    <div class="data-row clickable-row" onclick="openChart('energy_kwh', 'Cumulative Energy (kWh)')">
+                        <span class="data-label">Total Energy</span>
+                        <span class="data-value" id="val-kwh">0.000 kWh</span>
+                    </div>
+                </div>
+                
+                <div class="panel">
+                    <h2>System Diagnostics</h2>
+                    <div class="data-row clickable-row" onclick="openChart('pcb_temps', 'PCB Temperatures (°C)')">
+                        <span class="data-label">Top PCB Temp</span>
+                        <span class="data-value" id="val-top-board">-- °C</span>
+                    </div>
+                    <div class="data-row clickable-row" onclick="openChart('pcb_temps', 'PCB Temperatures (°C)')">
+                        <span class="data-label">Bottom PCB Temp</span>
+                        <span class="data-value" id="val-bot-board">-- °C</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Center Panel: SCADA with Clickable Overlays -->
+            <div class="scada-container">
+                <svg class="scada-svg" viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="3" result="blur" /><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+                        <linearGradient id="metal" x1="0%" y1="0%" x2="100%" y2="0%"><stop offset="0%" stop-color="#3f3f46" /><stop offset="50%" stop-color="#a1a1aa" /><stop offset="100%" stop-color="#27272a" /></linearGradient>
+                        <linearGradient id="water" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stop-color="rgba(56, 189, 248, 0.4)" /><stop offset="100%" stop-color="rgba(30, 58, 138, 0.8)" /></linearGradient>
+                    </defs>
+
+                    <!-- Plumbing -->
+                    <path d="M 105 205 L 170 205 L 170 235 L 240 235" stroke="#38bdf8" stroke-width="6" fill="none" filter="url(#glow)" />
+                    <path d="M 255 220 L 255 180 L 340 180 L 340 360 L 380 360" stroke="#fbbf24" stroke-width="6" fill="none" class="flowing-liquid" filter="url(#glow)" />
+                    <path d="M 380 360 L 430 360 L 430 310 L 480 310 L 480 360 L 530 360 L 530 310 L 580 310 L 580 360 L 620 360" stroke="#fbbf24" stroke-width="6" fill="none" opacity="0.8" />
+                    <path d="M 620 360 L 680 360 L 680 200 L 775 200" stroke="#fbbf24" stroke-width="6" fill="none" class="flowing-liquid" filter="url(#glow)" />
+
+                    <!-- CO2 Cylinder -->
+                    <rect x="50" y="220" width="80" height="220" rx="40" fill="url(#metal)" />
+                    <rect x="75" y="190" width="30" height="30" fill="#71717a" rx="5"/>
+                    <path d="M 105 205 L 120 205 L 120 380" stroke="#38bdf8" stroke-width="4" fill="none"/>
+                    <circle cx="90" cy="270" r="20" fill="#18181b" stroke="#71717a" stroke-width="2"/>
+                    <line x1="90" y1="270" x2="102" y2="260" stroke="#38bdf8" stroke-width="2"/>
+                    
+                    <!-- Beer Keg -->
+                    <rect x="200" y="250" width="110" height="190" rx="20" fill="url(#metal)" />
+                    <line x1="200" y1="290" x2="310" y2="290" stroke="#52525b" stroke-width="4" />
+                    <line x1="200" y1="390" x2="310" y2="390" stroke="#52525b" stroke-width="4" />
+                    <rect x="240" y="220" width="30" height="35" fill="#3f3f46" rx="4" />
+                    <text x="250" y="345" fill="#18181b" font-family="sans-serif" font-size="22" font-weight="900" letter-spacing="4" transform="rotate(-90 250 345)">KEG</text>
+
+                    <!-- Chiller Sump -->
+                    <rect x="380" y="280" width="240" height="160" rx="15" fill="url(#water)" stroke="#3f3f46" stroke-width="3" />
+                    <text x="500" y="420" fill="#a1a1aa" font-family="sans-serif" font-size="14" font-weight="bold" letter-spacing="2" text-anchor="middle">WATER SUMP</text>
+                    
+                    <!-- Condenser / Fan Unit -->
+                    <rect x="430" y="100" width="140" height="140" rx="15" fill="#18181b" stroke="#52525b" stroke-width="2" />
+                    <rect x="440" y="110" width="120" height="120" rx="10" fill="#09090b" />
+                    <g class="spin-fan">
+                        <circle cx="500" cy="170" r="10" fill="#71717a" />
+                        <path d="M 500 170 L 500 120 A 20 20 0 0 1 515 120 Z" fill="#3f3f46" />
+                        <path d="M 500 170 L 500 220 A 20 20 0 0 1 485 220 Z" fill="#3f3f46" />
+                        <path d="M 500 170 L 450 170 A 20 20 0 0 1 450 155 Z" fill="#3f3f46" />
+                        <path d="M 500 170 L 550 170 A 20 20 0 0 1 550 185 Z" fill="#3f3f46" />
+                    </g>
+
+                    <!-- Draft Beer Tap -->
+                    <rect x="760" y="160" width="30" height="120" rx="5" fill="url(#metal)" />
+                    <path d="M 775 160 L 785 80 L 765 80 Z" fill="#18181b" stroke="#52525b" stroke-width="2"/>
+                    <path d="M 760 210 Q 735 210 735 240" stroke="url(#metal)" stroke-width="12" fill="none" stroke-linecap="round"/>
+                </svg>
+
+                <!-- Floating Data Overlays (Clickable to open Historian) -->
+                <div id="box-co2" class="scada-box box-blue" onclick="openChart('co2', 'CO2 Supply Pressure (PSI)')">
+                    <span class="title">Supply Press</span><span class="val" id="scada-co2">0.0 PSI</span>
+                </div>
+                
+                <div id="box-sump" class="scada-box box-blue" onclick="openChart('temp_water_c', 'Chiller Bath Temperature (°C)')">
+                    <span class="title">Bath Temp</span><span class="val" id="scada-sump">0.0 °C</span>
+                </div>
+                
+                <div id="box-inlet" class="scada-box box-blue" onclick="openChart('air_temps', 'Condenser Air Temperatures (°C)')">
+                    <span class="title">Air Inlet</span><span class="val" id="scada-inlet">0.0 °C</span>
+                </div>
+                
+                <div id="box-outlet" class="scada-box box-blue" onclick="openChart('air_temps', 'Condenser Air Temperatures (°C)')">
+                    <span class="title">Air Outlet</span><span class="val" id="scada-outlet">0.0 °C</span>
+                </div>
+                
+                <div id="box-pour" class="scada-box box-amber" onclick="openChart('temp_tap1_c', 'Draft Pour Temperature (°C)')">
+                    <span class="title">Pour Temp</span><span class="val" id="scada-pour">0.0 °C</span>
+                </div>
+                
+                <div id="box-flow" class="scada-box box-green" onclick="openChart('flow_vol_tap1', 'Tap Flow Volume (Liters)')">
+                    <span class="title">Flow Vol</span><span class="val" id="scada-flow">0.00 L</span>
+                </div>
+            </div>
+
+            <!-- Right Panel -->
+            <div class="column" style="display:flex; flex-direction:column; gap:24px;">
+                <div class="panel">
+                    <h2>Asset Tracking</h2>
+                    <div class="data-row"><span class="data-label">Latitude</span><span class="data-value" id="val-lat">0.0000</span></div>
+                    <div class="data-row"><span class="data-label">Longitude</span><span class="data-value" id="val-lon">0.0000</span></div>
+                    <a id="maps-link" class="maps-link" href="#" target="_blank">Open in Google Maps</a>
+                </div>
+                <div class="panel">
+                    <h2>Session Info</h2>
+                    <div class="data-row"><span class="data-label">Last RFID</span><span class="data-value val-highlight-green" id="val-rfid">--</span></div>
+                </div>
+            </div>
+            
+            <div class="meta-footer">
+                <span id="meta-mac">MAC: --</span>
+                <span id="meta-serial">UNIT: --</span>
+                <span id="meta-fw">FW v--</span>
+            </div>
+        </div>
+
+        <!-- ==========================================
+             VIEW 2: COMMAND & CONTROL
+             ========================================== -->
+        <div id="view-control" class="view view-flex">
+            <!-- (Control tab UI remains exactly as previously designed) -->
+            <div class="cmd-grid">
+                <div class="panel">
+                    <h2>Device Health Monitor</h2>
+                    <div class="data-row"><span class="data-label">Device Name</span><span class="data-value" id="health-name">--</span></div>
+                    <div class="data-row"><span class="data-label">Zone</span><span class="data-value" id="health-zone">--</span></div>
+                    <div class="data-row"><span class="data-label">System Uptime</span><span class="data-value val-highlight-blue" id="health-uptime">--</span></div>
+                    <div class="data-row"><span class="data-label">Available Heap</span><span class="data-value" id="health-heap">--</span></div>
+                    <div class="data-row"><span class="data-label">Wi-Fi RSSI</span><span class="data-value val-highlight-amber" id="health-rssi">--</span></div>
+                </div>
+
+                <div class="panel">
+                    <h2>Quick Actions</h2>
+                    <div class="cmd-grid" style="grid-template-columns: 1fr 1fr;">
+                        <button class="cmd-btn btn-green" onclick="sendCmd({cmd: 'RFIDON'})">Enable RFID</button>
+                        <button class="cmd-btn btn-red" onclick="sendCmd({cmd: 'RFIDOFF'})">Disable RFID</button>
+                        <button class="cmd-btn btn-amber" onclick="sendCmd({cmd: 'RESETFLOW1'})">Reset Flow</button>
+                        <button class="cmd-btn btn-red" onclick="if(confirm('Reboot device?')) sendCmd({cmd: 'RESTART'})">Reboot</button>
+                        <button class="cmd-btn btn-blue" onclick="sendCmd({cmd: 'INSTANTTELEMETRY'})">Get Telemetry</button>
+                        <button class="cmd-btn btn-blue" onclick="sendCmd({cmd: 'INSTANTHEALTH'})">Get Health</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="cmd-grid">
+                <div class="panel">
+                    <h2>Telemetry Interval</h2>
+                    <p style="font-size: 13px; color: var(--text-muted); margin: 0;">Set how often the device sends data (in seconds).</p>
+                    <div class="input-group">
+                        <input type="number" id="input-interval" placeholder="e.g. 30" min="5" max="3600">
+                        <button class="cmd-btn btn-blue" style="padding: 12px 20px;" onclick="sendIntervalCmd()">Apply</button>
+                    </div>
+                </div>
+
+                <div class="panel">
+                    <h2>Manual Command</h2>
+                    <p style="font-size: 13px; color: var(--text-muted); margin: 0;">Send raw JSON to the command topic.</p>
+                    <div class="input-group">
+                        <input type="text" id="input-raw" placeholder='{"cmd": "YOUR_COMMAND"}'>
+                        <button class="cmd-btn btn-amber" style="padding: 12px 20px;" onclick="sendRawCmd()">Send JSON</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>Command Log</h2>
+                <div id="cmd-terminal" class="terminal">
+                    <div class="term-entry"><span class="term-time">[SYSTEM]</span><span class="term-msg">Terminal ready. Waiting to send commands...</span></div>
+                </div>
+            </div>
+            
+        </div>
+    </div>
+
+    <!-- ==========================================
+         HISTORIAN CHART MODAL
+         ========================================== -->
+    <div id="chart-modal">
+        <div class="chart-panel">
+            <div class="chart-header">
+                <h2 id="chart-title">Sensor History</h2>
+                <button class="btn-close" onclick="closeChart()">Back to Dashboard</button>
+            </div>
+            <div id="apex-chart-container"></div>
+        </div>
+    </div>
+
+    <!-- Logic -->
+    <script>
+        // -----------------------------------------
+        // 1. IndexedDB Historian Pipeline
+        // -----------------------------------------
+        const DB_NAME = "ScadaHistorianDB";
+        const STORE_NAME = "telemetry";
+        let db;
+
+        // Initialize Database
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onupgradeneeded = function(event) {
+            db = event.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) {
+                db.createObjectStore(STORE_NAME, { keyPath: "timestamp" });
+            }
+        };
+        request.onsuccess = function(event) {
+            db = event.target.result;
+            console.log("IndexedDB Historian initialized.");
+            pruneOldData(); 
+        };
+        request.onerror = function(event) { console.error("IndexedDB error: ", event.target.errorCode); };
+
+        // Insert new telemetry record (EXPANDED FOR ALL METRICS)
+        function recordTelemetryToDB(payload) {
+            if (!db || !payload.metrics || !payload.metrics.chiller) return;
+            
+            const tx = db.transaction(STORE_NAME, "readwrite");
+            const store = tx.objectStore(STORE_NAME);
+            
+            const ts = payload.timestamp < 20000000000 ? payload.timestamp * 1000 : payload.timestamp;
+            const c = payload.metrics.chiller;
+
+            const record = {
+                timestamp: ts,
+                co2: payload.metrics.co2_pressure_psi,
+                temp_water_c: c.temp_water_c,
+                temp_inlet_c: c.temp_inlet_c,
+                temp_outlet_c: c.temp_outlet_c,
+                temp_tap1_c: c.temp_tap1_c,
+                flow_vol_tap1: c.flow_vol_tap1,
+                // Newly added metrics
+                voltage_v: c.voltage_v,
+                current_a: c.current_a,
+                power_w: c.power_w,
+                energy_kwh: c.energy_kwh,
+                temp_topboard_c: c.temp_topboard_c,
+                temp_bottomboard_c: c.temp_bottomboard_c
+            };
+            store.put(record);
+        }
+
+        function pruneOldData() {
+            if (!db) return;
+            const cutoffTime = Date.now() - (48 * 60 * 60 * 1000); 
+            const tx = db.transaction(STORE_NAME, "readwrite");
+            const store = tx.objectStore(STORE_NAME);
+            const request = store.openCursor();
+            
+            request.onsuccess = function(event) {
+                const cursor = event.target.result;
+                if (cursor) {
+                    if (cursor.value.timestamp < cutoffTime) {
+                        cursor.delete();
+                        cursor.continue();
+                    }
+                }
+            };
+        }
+
+        function getHistoricalData() {
+            return new Promise((resolve, reject) => {
+                if (!db) { resolve([]); return; }
+                const tx = db.transaction(STORE_NAME, "readonly");
+                const store = tx.objectStore(STORE_NAME);
+                const request = store.getAll();
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // -----------------------------------------
+        // 2. ApexCharts Implementation
+        // -----------------------------------------
+        let apexChartInstance = null;
+
+        async function openChart(metricKey, title) {
+            document.getElementById('chart-title').innerText = title;
+            document.getElementById('chart-modal').classList.add('active');
+
+            const rawData = await getHistoricalData();
+            
+            let series = [];
+            let colors = [];
+
+            // Grouping Logic for Air Temps
+            if (metricKey === 'air_temps') {
+                const inletData = rawData.map(d => [d.timestamp, d.temp_inlet_c]);
+                const outletData = rawData.map(d => [d.timestamp, d.temp_outlet_c]);
+                series = [
+                    { name: "Air Inlet °C", data: inletData },
+                    { name: "Air Outlet °C", data: outletData }
+                ];
+                colors = ['#38bdf8', '#fbbf24']; 
+            } 
+            // Grouping Logic for Board Temps
+            else if (metricKey === 'pcb_temps') {
+                const topData = rawData.map(d => [d.timestamp, d.temp_topboard_c]);
+                const botData = rawData.map(d => [d.timestamp, d.temp_bottomboard_c]);
+                series = [
+                    { name: "Top Board °C", data: topData },
+                    { name: "Bottom Board °C", data: botData }
+                ];
+                colors = ['#38bdf8', '#f87171']; // Blue and Red 
+            }
+            // Standard single trace
+            else {
+                const mappedData = rawData.map(d => [d.timestamp, d[metricKey]]);
+                series = [{ name: title, data: mappedData }];
+                
+                // Color formatting based on metric type
+                if (metricKey === 'voltage_v' || metricKey === 'power_w') colors = ['#38bdf8'];
+                else if (metricKey === 'current_a' || metricKey === 'energy_kwh') colors = ['#34d399'];
+                else colors = ['#34d399'];
+            }
+
+            const options = {
+                series: series,
+                chart: {
+                    type: 'area', height: 400, animations: { enabled: false },
+                    toolbar: { show: true, tools: { download: true, selection: true, zoom: true, pan: true } },
+                    background: 'transparent', theme: { mode: 'dark' }
+                },
+                colors: colors,
+                dataLabels: { enabled: false }, stroke: { curve: 'smooth', width: 2 },
+                fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.0, stops: [0, 100] } },
+                xaxis: { type: 'datetime', labels: { style: { colors: '#a1a1aa' } }, axisBorder: { show: false }, axisTicks: { show: false } },
+                yaxis: { labels: { style: { colors: '#a1a1aa' } } },
+                grid: { borderColor: 'rgba(255,255,255,0.05)', strokeDashArray: 4 }
+            };
+
+            if (apexChartInstance) apexChartInstance.destroy();
+            apexChartInstance = new ApexCharts(document.querySelector("#apex-chart-container"), options);
+            apexChartInstance.render();
+        }
+
+        function closeChart() { document.getElementById('chart-modal').classList.remove('active'); }
+
+        // -----------------------------------------
+        // 3. UI Tab & Format Logic
+        // -----------------------------------------
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            event.target.classList.add('active');
+            document.querySelectorAll('.view').forEach(view => view.classList.remove('active'));
+            document.getElementById('view-' + tabName).classList.add('active');
+        }
+
+        function formatUptime(seconds) {
+            const d = Math.floor(seconds / (3600*24));
+            const h = Math.floor(seconds % (3600*24) / 3600);
+            const m = Math.floor(seconds % 3600 / 60);
+            const s = Math.floor(seconds % 60);
+            let res = [];
+            if(d > 0) res.push(d + "d");
+            if(h > 0) res.push(h + "h");
+            if(m > 0) res.push(m + "m");
+            res.push(s + "s");
+            return res.join(" ");
+        }
+
+        function updateGlobalTimestamp(ts) {
+            const normalizedTs = ts < 20000000000 ? ts * 1000 : ts;
+            const date = new Date(normalizedTs);
+            document.getElementById('global-last-update').innerText = "Last Update: " + date.toLocaleTimeString() + " " + date.toLocaleDateString();
+        }
+
+        // -----------------------------------------
+        // 4. MQTT Connection & Routing
+        // -----------------------------------------
+        const brokerUrl = "wss://156bc95c062b419ebc9d9543b732d0f5.s1.eu.hivemq.cloud:8884/mqtt";
+        const TOPIC_TELEMETRY = "nodes/20E7C86988C8/telemetry";
+        const TOPIC_STATUS = "nodes/20E7C86988C8/status";
+        const TOPIC_COMMAND = "nodes/20E7C86988C8/cmd";
+        
+        const mqttOptions = {
+            clean: true, connectTimeout: 4000,
+            clientId: 'web_scada_' + Math.random().toString(16).substr(2, 8),
+            username: "kasun", password: "kasua1U23",
+        };
+
+        const brokerStatusEl = document.getElementById('broker-status');
+        const deviceStatusEl = document.getElementById('device-status');
+        const client = mqtt.connect(brokerUrl, mqttOptions);
+        let isConnected = false;
+
+        client.on('connect', function () {
+            isConnected = true;
+            brokerStatusEl.innerText = "BROKER: CONNECTED"; brokerStatusEl.className = "status status-good";
+            client.subscribe([TOPIC_TELEMETRY, TOPIC_STATUS], function(err) {
+                if(!err) {
+                    logTerminal("[SYSTEM]", "Connected to broker.", "term-msg");
+                    sendCmd({ cmd: 'INSTANTTELEMETRY' });
+                }
+            });
+        });
+
+        client.on('message', function (topic, message) {
+            const payloadStr = message.toString();
+            if (topic === TOPIC_STATUS) {
+                if (payloadStr.trim().toLowerCase() === 'online') { deviceStatusEl.innerText = "DEVICE: ONLINE"; deviceStatusEl.className = "status status-good"; } 
+                else if (payloadStr.trim().toLowerCase() === 'offline') { deviceStatusEl.innerText = "DEVICE: OFFLINE"; deviceStatusEl.className = "status status-bad"; }
+                return; 
+            }
+            if (topic === TOPIC_TELEMETRY) {
+                try {
+                    const payload = JSON.parse(payloadStr);
+                    if (payload.timestamp) updateGlobalTimestamp(payload.timestamp);
+
+                    if (payload.type === "health_data") updateHealthDashboard(payload);
+                    else {
+                        updateSensorDashboard(payload);
+                        recordTelemetryToDB(payload);
+                    }
+                } catch (e) { console.error("Error parsing JSON:", e); }
+            }
+        });
+
+        client.on('error', function () {
+            isConnected = false; brokerStatusEl.innerText = "BROKER: ERROR"; brokerStatusEl.className = "status status-bad";
+        });
+        
+        client.on('offline', function () {
+            isConnected = false; brokerStatusEl.innerText = "BROKER: OFFLINE"; brokerStatusEl.className = "status status-bad";
+        });
+
+        // -----------------------------------------
+        // 5. Dashboard Data Mapping
+        // -----------------------------------------
+        function updateHealthDashboard(data) {
+            if(data.device_name) document.getElementById('health-name').innerText = data.device_name;
+            if(data.zone) document.getElementById('health-zone').innerText = data.zone;
+            if(data.uptime_sec !== undefined) document.getElementById('health-uptime').innerText = formatUptime(data.uptime_sec);
+            if(data.heap !== undefined) document.getElementById('health-heap').innerText = (data.heap / 1024).toFixed(1) + " KB";
+            if(data.wifi_rssi !== undefined) document.getElementById('health-rssi').innerText = data.wifi_rssi + " dBm";
+            if(data.status === "online") { deviceStatusEl.innerText = "DEVICE: ONLINE"; deviceStatusEl.className = "status status-good"; }
+        }
+
+        function updateSensorDashboard(data) {
+            if (data.device) {
+                document.getElementById('meta-mac').innerText = "MAC: " + data.device.mac_address;
+                document.getElementById('meta-serial').innerText = "UNIT: " + data.device.serial_number;
+                document.getElementById('meta-fw').innerText = "FW v" + data.device.firmware_version;
+            }
+
+            if (data.metrics) {
+                const m = data.metrics;
+                if (m.co2_pressure_psi !== undefined) document.getElementById('scada-co2').innerText = m.co2_pressure_psi.toFixed(1) + " PSI";
+                
+                if (m.chiller) {
+                    const c = m.chiller;
+                    if (c.temp_water_c !== undefined) document.getElementById('scada-sump').innerText = c.temp_water_c.toFixed(1) + " °C";
+                    if (c.temp_inlet_c !== undefined) document.getElementById('scada-inlet').innerText = c.temp_inlet_c.toFixed(1) + " °C";
+                    if (c.temp_outlet_c !== undefined) document.getElementById('scada-outlet').innerText = c.temp_outlet_c.toFixed(1) + " °C";
+                    
+                    if (c.flow_vol_tap1 !== undefined) document.getElementById('scada-flow').innerText = c.flow_vol_tap1.toFixed(3) + " L";
+                    if (c.voltage_v !== undefined) document.getElementById('val-volt').innerText = c.voltage_v.toFixed(1) + " V";
+                    if (c.current_a !== undefined) document.getElementById('val-curr').innerText = c.current_a.toFixed(2) + " A";
+                    if (c.power_w !== undefined) document.getElementById('val-watt').innerText = c.power_w.toFixed(0) + " W";
+                    if (c.energy_kwh !== undefined) document.getElementById('val-kwh').innerText = c.energy_kwh.toFixed(3) + " kWh";
+                    if (c.temp_topboard_c !== undefined) document.getElementById('val-top-board').innerText = c.temp_topboard_c.toFixed(1) + " °C";
+                    if (c.temp_bottomboard_c !== undefined) document.getElementById('val-bot-board').innerText = c.temp_bottomboard_c.toFixed(1) + " °C";
+
+                    // ALARM: Pour Temperature
+                    if (c.temp_tap1_c !== undefined) {
+                        const pourTemp = c.temp_tap1_c;
+                        document.getElementById('scada-pour').innerText = pourTemp.toFixed(1) + " °C";
+                        const pourBox = document.getElementById('box-pour');
+                        if (pourTemp > 5.0) pourBox.classList.add('alarm-active');
+                        else pourBox.classList.remove('alarm-active');
+                    }
+                }
+                
+                if (m.gps) {
+                    document.getElementById('val-lat').innerText = m.gps.lat.toFixed(6);
+                    document.getElementById('val-lon').innerText = m.gps.lon.toFixed(6);
+                    document.getElementById('maps-link').href = `https://www.google.com/maps/search/?api=1&query=${m.gps.lat},${m.gps.lon}`;
+                }
+                
+                if (m.last_rfid !== undefined) document.getElementById('val-rfid').innerText = m.last_rfid === 0 ? "None" : m.last_rfid;
+            }
+        }
+
+        // -----------------------------------------
+        // 6. Command Terminal Logic
+        // -----------------------------------------
+        function getTimeString() {
+            const now = new Date();
+            return `[${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}]`;
+        }
+
+        function logTerminal(prefix, msg, cssClass) {
+            const term = document.getElementById('cmd-terminal');
+            const entry = document.createElement('div');
+            entry.className = 'term-entry';
+            entry.innerHTML = `<span class="term-time">${prefix === '[SYSTEM]' || prefix === '[ERROR]' ? prefix : getTimeString()}</span><span class="${cssClass}">${msg}</span>`;
+            term.appendChild(entry);
+            term.scrollTop = term.scrollHeight;
+        }
+
+        function sendCmd(payloadObj) {
+            if (!isConnected) { alert("Cannot send command: Disconnected from broker."); return; }
+            const payloadString = JSON.stringify(payloadObj);
+            client.publish(TOPIC_COMMAND, payloadString, { qos: 1 }, (err) => {
+                if (err) logTerminal("[ERROR]", "Failed to send: " + payloadString, "term-err");
+                else logTerminal("SENT", `-> ${payloadString}`, "term-msg");
+            });
+        }
+
+        function sendIntervalCmd() {
+            const val = document.getElementById('input-interval').value;
+            if (!val || isNaN(val) || val <= 0) { alert("Please enter a valid interval."); return; }
+            sendCmd({ cmd: "TELEUPDATE", interval: parseInt(val) });
+        }
+
+        function sendRawCmd() {
+            const rawStr = document.getElementById('input-raw').value;
+            try { sendCmd(JSON.parse(rawStr)); } 
+            catch (e) { alert("Invalid JSON format."); logTerminal("[ERROR]", "JSON Parse failed.", "term-err"); }
+        }
+    </script>
+</body>
+</html>
